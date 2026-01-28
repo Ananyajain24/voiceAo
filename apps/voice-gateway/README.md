@@ -177,13 +177,8 @@ function startRecording(callId):
     if recordingAlreadyRunning(callId):
         return
 
-    egress = livekit.startEgress({
-        roomName,
-        tracks: ["driver", "bot", "human"],
-        output: S3_BUCKET
-    })
-
-    storeEgressHandle(callId, egress)
+    sink = recordingAdapter.getSink(callId)
+    livekit.startEgress({ sink })
 
 
 function stopRecording(callId):
@@ -387,3 +382,4 @@ The Voice Gateway should remain:
 - boring.
 
 Anything else belongs elsewhere.
+
