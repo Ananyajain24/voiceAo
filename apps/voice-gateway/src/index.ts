@@ -1,141 +1,154 @@
-import "dotenv/config";
-import express from "express";
-import bodyParser from "body-parser";
-import {
-  WebhookEvent,
-  WebhookReceiver,
-} from "livekit-server-sdk";
+// src/index.ts
 
-import {
-  createOrGetRoom,
-  closeRoom,
-} from "./livekit/room.manager";
+import "dotenv/config"
+import express from "express"
+import bodyParser from "body-parser"
+import { WebhookReceiver } from "livekit-server-sdk"
 
-import {
-  onParticipantConnected,
-  onParticipantDisconnected,
-} from "./livekit/participant.manager";
+import { loadEnv } from "./config/env"
+import { RoomManager } from "./livekit/room.manager"
+import { ParticipantManager } from "./livekit/participant.manager"
+import { TrackManager } from "./livekit/track.manager"
 
-import {
-  onTrackPublished,
-  onTrackUnpublished,
-} from "./livekit/track.manager";
+// --------------------
+// Process state
+// --------------------
+let shuttingDown = false
 
-const PORT = process.env.PORT || 3001;
-
-// -------------------------------------
-// LiveKit Webhook Setup
-// -------------------------------------
-const receiver = new WebhookReceiver(
-  process.env.LIVEKIT_API_KEY!,
-  process.env.LIVEKIT_API_SECRET!
-);
-
-// -------------------------------------
-// HTTP Server
-// -------------------------------------
-const app = express();
-app.use(bodyParser.json());
-
-// -------------------------------------
-// Webhook Endpoint
-// -------------------------------------
-app.post("/livekit/webhook", async (req, res) => {
-  let event: WebhookEvent;
-
+// --------------------
+// Bootstrap
+// --------------------
+async function boot() {
   try {
-    event = await receiver.receive(
-      req.body,
-      req.headers["authorization"] as string
-    );
+    console.log("[BOOT] Starting Voice Gateway")
+
+    // 1️⃣ Load environment
+    const env = loadEnv()
+
+    // 2️⃣ Create managers (NO logic here)
+    const roomManager = new RoomManager(
+      env.LIVEKIT_URL,
+      env.LIVEKIT_API_KEY,
+      env.LIVEKIT_API_SECRET
+    )
+
+    const participantManager = new ParticipantManager(roomManager)
+    const trackManager = new TrackManager()
+
+    // 3️⃣ Setup webhook server
+    const app = express()
+
+    // IMPORTANT: must be raw for signature verification
+    app.use(bodyParser.raw({ type: "application/webhook+json" }))
+
+    const receiver = new WebhookReceiver(
+      env.LIVEKIT_API_KEY,
+      env.LIVEKIT_API_SECRET
+    )
+
+    app.post("/livekit/webhook", async (req, res) => {
+      try {
+        const event = await receiver.receive(
+          req.body,
+          req.headers["authorization"]
+        )
+
+        console.log("[WEBHOOK] Event received:", event.event)
+
+        const callId = event.room?.metadata
+          ? JSON.parse(event.room.metadata).callId
+          : undefined
+
+        if (!callId) {
+          return res.status(200).send("ignored")
+        }
+
+        // --------------------
+        // Participant lifecycle
+        // --------------------
+        if (event.event === "participant_joined" && event.participant) {
+          await participantManager.onParticipantConnected(callId, {
+            identity: event.participant.identity,
+            metadata: event.participant.metadata,
+          })
+        }
+
+        if (event.event === "participant_left" && event.participant) {
+          await participantManager.onParticipantDisconnected(callId, {
+            identity: event.participant.identity,
+            metadata: event.participant.metadata,
+          })
+        }
+
+        // --------------------
+        // Track lifecycle
+        // --------------------
+        if (event.event === "track_published" && event.participant && event.track) {
+          const role = participantManager.resolveRole({
+            identity: event.participant.identity,
+            metadata: event.participant.metadata,
+          })
+
+          trackManager.onTrackPublished(
+            {
+              sid: event.track.sid,
+              kind: event.track.type === 0 ? "audio" : "video",
+            },
+            {
+              identity: event.participant.identity,
+              metadata: event.participant.metadata,
+            },
+            role
+          )
+        }
+
+        if (event.event === "track_unpublished" && event.track) {
+          trackManager.onTrackUnpublished(event.track.sid)
+        }
+
+        res.status(200).send("ok")
+      } catch (err) {
+        console.error("[WEBHOOK] Invalid event", err)
+        res.status(400).send("invalid")
+      }
+    })
+
+    // 4️⃣ Start server
+    const PORT = 3000
+    app.listen(PORT, () => {
+      console.log(`[BOOT] Webhook server listening on :${PORT}`)
+    })
+
+    console.log("[BOOT] Voice Gateway ready")
   } catch (err) {
-    console.error("Invalid webhook:", err);
-    res.status(401).send("invalid");
-    return;
+    console.error("[BOOT] Fatal startup error:", err)
+    process.exit(1)
   }
+}
 
-  const callId =
-    event.room?.metadata
-      ? JSON.parse(event.room.metadata).callId
-      : undefined;
+// --------------------
+// Shutdown
+// --------------------
+async function shutdown(signal: string) {
+  if (shuttingDown) return
+  shuttingDown = true
 
-  if (!callId) {
-    res.status(200).send("ignored");
-    return;
-  }
+  console.log(`[SHUTDOWN] Received ${signal}`)
+  process.exit(0)
+}
 
-  // ---------------------------------
-  // Event Routing
-  // ---------------------------------
-  switch (event.event) {
-    case "room_started":
-      await createOrGetRoom(callId);
-      break;
+process.on("SIGINT", () => shutdown("SIGINT"))
+process.on("SIGTERM", () => shutdown("SIGTERM"))
+process.on("uncaughtException", err => {
+  console.error("[FATAL] Uncaught exception", err)
+  shutdown("uncaughtException")
+})
+process.on("unhandledRejection", err => {
+  console.error("[FATAL] Unhandled rejection", err)
+  shutdown("unhandledRejection")
+})
 
-    case "participant_joined":
-      if (event.participant) {
-        onParticipantConnected(
-          event.participant,
-          callId
-        );
-      }
-      break;
-
-    case "participant_left":
-      if (event.participant) {
-        await onParticipantDisconnected(
-          event.participant,
-          callId
-        );
-      }
-      break;
-
-    case "track_published":
-      if (event.track && event.participant) {
-        onTrackPublished(
-          event.track,
-          event.participant,
-          callId
-        );
-      }
-      break;
-
-    case "track_unpublished":
-      if (event.track) {
-        onTrackUnpublished(event.track);
-      }
-      break;
-
-    case "room_finished":
-      await closeRoom(callId);
-      break;
-
-    default:
-      // ignore
-      break;
-  }
-
-  res.status(200).send("ok");
-});
-
-// -------------------------------------
-// Startup
-// -------------------------------------
-app.listen(PORT, () => {
-  console.log(
-    `Voice Gateway listening on port ${PORT}`
-  );
-});
-
-// -------------------------------------
-// Graceful Shutdown
-// -------------------------------------
-process.on("SIGTERM", async () => {
-  console.log("SIGTERM received, shutting down");
-  process.exit(0);
-});
-
-process.on("SIGINT", async () => {
-  console.log("SIGINT received, shutting down");
-  process.exit(0);
-});
+// --------------------
+// Start
+// --------------------
+boot()

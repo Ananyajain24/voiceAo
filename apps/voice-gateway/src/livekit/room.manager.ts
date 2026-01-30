@@ -1,52 +1,60 @@
-import { RoomServiceClient } from "livekit-server-sdk";
-import { ENV } from "../config/env";
-import { stopRecording } from "./egress.manager";
+// src/livekit/room.manager.ts
+import { callEvents } from "../events/call.events"
+import { handoffEvents } from "../events/handoff.events"
 
-const livekit = new RoomServiceClient(
-  ENV.LIVEKIT_URL,
-  ENV.LIVEKIT_API_KEY,
-  ENV.LIVEKIT_API_SECRET
-);
+import { RoomServiceClient } from "livekit-server-sdk"
 
-// callId → roomName
-const activeRooms = new Map<string, string>();
+export class RoomManager {
+  private client: RoomServiceClient
 
-export async function createOrGetRoom(callId: string): Promise<string> {
-  const roomName = `call_${callId}`;
-
-  if (activeRooms.has(callId)) {
-    return roomName;
+  constructor(livekitUrl: string, apiKey: string, apiSecret: string) {
+    this.client = new RoomServiceClient(livekitUrl, apiKey, apiSecret)
   }
 
-  const rooms = await livekit.listRooms();
-  const exists = rooms.find(r => r.name === roomName);
-
-  if (!exists) {
-    await livekit.createRoom({
-      name: roomName,
-      metadata: JSON.stringify({ callId }),
-      maxParticipants: 3,
-    });
+  private roomName(callId: string): string {
+    return `call_${callId}`
   }
 
-  activeRooms.set(callId, roomName);
-  return roomName;
+async createOrGetRoom(callId: string) {
+  const name = this.roomName(callId)
+
+  const rooms = await this.client.listRooms()
+  const existing = rooms.find(r => r.name === name)
+
+  if (existing) {
+    return existing
+  }
+
+  const room = await this.client.createRoom({
+    name,
+    metadata: JSON.stringify({ callId }),
+    maxParticipants: 3,
+  })
+
+  callEvents.emit("CALL_CREATED", { callId })
+  handoffEvents.emit("ROOM_CREATED", callId)
+
+  return room
 }
 
-export async function closeRoom(callId: string) {
-  const roomName = activeRooms.get(callId);
-  if (!roomName) return;
+
+  async closeRoom(callId: string) {
+  const name = this.roomName(callId)
 
   try {
-    const participants = await livekit.listParticipants(roomName);
+    const participants = await this.client.listParticipants(name)
 
     for (const p of participants) {
-      await livekit.removeParticipant(roomName, p.identity);
+      await this.client.removeParticipant(name, p.identity)
     }
 
-    await stopRecording(callId);
-    await livekit.deleteRoom(roomName);
-  } finally {
-    activeRooms.delete(callId);
+    await this.client.deleteRoom(name)
+
+    callEvents.emit("CALL_ENDED", { callId })
+    handoffEvents.emit("ROOM_CLOSED", callId)
+  } catch {
+    // safe close
   }
+}
+
 }

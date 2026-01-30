@@ -1,35 +1,29 @@
-import { EventEmitter } from "events";
+type HandoffEventType =
+  | "ROOM_CREATED"
+  | "ROOM_CLOSED"
+  | "RECORDING_STARTED"
+  | "RECORDING_STOPPED"
 
-export type HandoffRequestedEvent = {
-  callId: string;
-  from: "bot";
-};
+class HandoffEventEmitter {
+  private emitted = new Set<string>()
 
-export type HandoffCompletedEvent = {
-  callId: string;
-  to: "human";
-};
+  emit(type: HandoffEventType, callId: string) {
+    const key = `${callId}:${type}`
 
-class HandoffEvents extends EventEmitter {
-  emitHandoffRequested(event: HandoffRequestedEvent) {
-    this.emit("handoff.requested", event);
-  }
+    if (this.emitted.has(key)) {
+      return
+    }
 
-  emitHandoffCompleted(event: HandoffCompletedEvent) {
-    this.emit("handoff.completed", event);
-  }
+    this.emitted.add(key)
 
-  onHandoffRequested(
-    listener: (event: HandoffRequestedEvent) => void
-  ) {
-    this.on("handoff.requested", listener);
-  }
+    const event = {
+      type,
+      callId,
+      timestamp: new Date().toISOString(),
+    }
 
-  onHandoffCompleted(
-    listener: (event: HandoffCompletedEvent) => void
-  ) {
-    this.on("handoff.completed", listener);
+    console.log("[HANDOFF_EVENT]", JSON.stringify(event))
   }
 }
 
-export const handoffEvents = new HandoffEvents();
+export const handoffEvents = new HandoffEventEmitter()

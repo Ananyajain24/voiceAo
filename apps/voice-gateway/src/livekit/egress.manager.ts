@@ -1,61 +1,64 @@
+// src/livekit/egress.manager.ts
+
 import {
   EgressClient,
-  EncodedOutputs,
   EncodedFileType,
+  EncodedOutputs,
   EgressInfo,
-} from "livekit-server-sdk";
-import { ENV } from "../config/env";
+  EncodedFileOutput,
+} from "livekit-server-sdk"
 
-const egressClient = new EgressClient(
-  ENV.LIVEKIT_URL,
-  ENV.LIVEKIT_API_KEY,
-  ENV.LIVEKIT_API_SECRET
-);
+export class EgressManager {
+  private client: EgressClient
+  private active = new Map<string, string>() // callId → egressId
 
-// callId → egressId
-const activeEgress = new Map<string, string>();
-
-// -------------------------------
-// Start Recording
-// -------------------------------
-export async function startRecording(callId: string) {
-  if (activeEgress.has(callId)) return;
-
-  const roomName = `call_${callId}`;
-
-  try {
-    const egress: EgressInfo =
-  await egressClient.startRoomCompositeEgress(
-    roomName,
-    {
-      fileOutputs: [
-        {
-          fileType: EncodedFileType.MP4,
-          filepath: `recordings/${roomName}.mp4`,
-        },
-      ],
-    } as EncodedOutputs,
-    "speaker-light"
-  );
-
-    activeEgress.set(callId, egress.egressId);
-  } catch (err) {
-    console.error("Failed to start recording:", err);
+  constructor(livekitUrl: string, apiKey: string, apiSecret: string) {
+    this.client = new EgressClient(livekitUrl, apiKey, apiSecret)
   }
-}
 
-// -------------------------------
-// Stop Recording
-// -------------------------------
-export async function stopRecording(callId: string) {
-  const egressId = activeEgress.get(callId);
-  if (!egressId) return;
+  async startRecording(callId: string, roomName: string) {
+    if (this.active.has(callId)) {
+      return
+    }
 
-  try {
-    await egressClient.stopEgress(egressId);
-  } catch (err) {
-    console.error("Failed to stop recording:", err);
-  } finally {
-    activeEgress.delete(callId);
+    try {
+      const output: EncodedOutputs = {
+        file: new EncodedFileOutput({
+          filepath: `recordings/${callId}.mp4`,
+          fileType: EncodedFileType.MP4,
+        }),
+      }
+
+      const result = await this.client.startRoomCompositeEgress(
+        roomName,
+        output,
+        {
+          layout: "speaker",
+        }
+      )
+
+      this.active.set(callId, result.egressId)
+
+      console.log("[EGRESS] Recording started", {
+        callId,
+        egressId: result.egressId,
+      })
+    } catch (err) {
+      console.error("[EGRESS] Failed to start recording", err)
+    }
+  }
+
+  async stopRecording(callId: string) {
+    const egressId = this.active.get(callId)
+    if (!egressId) return
+
+    try {
+      await this.client.stopEgress(egressId)
+      console.log("[EGRESS] Recording stopped", { callId })
+    } catch (err) {
+      console.warn("[EGRESS] Failed to stop recording", err)
+    } finally {
+      this.active.delete(callId)
+    }
   }
 }

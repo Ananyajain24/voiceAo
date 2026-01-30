@@ -3,9 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-  "dev": "ts-node --project tsconfig.json src/index.ts",
-  "build": "tsc --project tsconfig.json",
-  "start": "node dist/index.js",
-  "clean": "rimraf dist"
+    "dev": "ts-node --project tsconfig.json src/index.ts",
+    "build": "tsc --project tsconfig.json",
+    "start": "node dist/index.js",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "body-parser": "^2.2.2",
+    "express": "^5.2.1",
+    "livekit-server-sdk": "^2.15.0"
   }
 }

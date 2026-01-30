@@ -1,56 +1,56 @@
-import {
-  TrackInfo,
-  ParticipantInfo,
-  TrackType,
-} from "livekit-server-sdk";
-import {
-  attachAudioIngress,
-  detachAudioIngress,
-} from "../streaming/audio.ingress";
+import { ParticipantRole } from "./participant.manager"
 
-
-export function onTrackPublished(
-  track: TrackInfo,
-  participant: ParticipantInfo,
-  callId: string
-) {
-
-  if (track.type !== TrackType.AUDIO) return;
-
-
-  let role: "driver" | "bot" | "human" = "human";
-
-  try {
-    if (participant.metadata) {
-      const parsed = JSON.parse(participant.metadata);
-      role = parsed.role;
-    }
-  } catch {
-    
-  }
-
-  if (role === "bot") {
-    return;
-  }
-
-  const startTs = Date.now();
-
-
-  attachAudioIngress({
-    callId,
-    participantId: participant.identity,
-    trackSid: track.sid,
-    role: role === "driver" ? "driver" : "human",
-  });
-
-
-
+type LiveKitTrack = {
+  sid: string
+  kind: "audio" | "video"
 }
 
-export function onTrackUnpublished(
-  track: TrackInfo
-) {
-  if (track.type !== TrackType.AUDIO) return;
+type LiveKitParticipant = {
+  identity: string
+  metadata?: string
+}
 
-  detachAudioIngress(track.sid);
+export class TrackManager {
+  private activeTracks = new Map<string, LiveKitTrack>()
+
+  onTrackPublished(
+    track: LiveKitTrack,
+    participant: LiveKitParticipant,
+    role: ParticipantRole
+  ) {
+    // 1️⃣ Only audio
+    if (track.kind !== "audio") {
+      return
+    }
+
+    // 2️⃣ Never subscribe to bot audio
+    if (role === "bot") {
+      return
+    }
+
+    // 3️⃣ Idempotent attach
+    if (this.activeTracks.has(track.sid)) {
+      return
+    }
+
+    this.activeTracks.set(track.sid, track)
+
+    console.log("[TRACK] Audio track attached", {
+      trackSid: track.sid,
+      participant: participant.identity,
+      role,
+    })
+  }
+
+  onTrackUnpublished(trackSid: string) {
+    if (!this.activeTracks.has(trackSid)) {
+      return
+    }
+
+    this.activeTracks.delete(trackSid)
+
+    console.log("[TRACK] Audio track detached", {
+      trackSid,
+    })
+  }
 }

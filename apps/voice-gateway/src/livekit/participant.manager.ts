@@ -1,59 +1,67 @@
-import { ParticipantInfo } from "livekit-server-sdk";
-import { callEvents } from "../events/call.events.js";
-import { closeRoom } from "./room.manager";
 
-function resolveRole(identity: string): "driver" | "bot" | "human" {
-  if (identity.startsWith("driver")) return "driver";
-  if (identity.startsWith("bot")) return "bot";
-  return "human";
+import { callEvents } from "../events/call.events"
+import { RoomManager } from "./room.manager"
+
+export type ParticipantRole = "driver" | "human" | "bot"
+
+type LiveKitParticipant = {
+  identity: string
+  metadata?: string
 }
 
-export function onParticipantConnected(
-  participant: ParticipantInfo,
-  callId: string
-) {
-  const role = resolveRole(participant.identity);
+export class ParticipantManager {
+  constructor(private roomManager: RoomManager) {}
 
-  participant.metadata = JSON.stringify({ role });
-
-  callEvents.emit("participant.joined", {
-    callId,
-    role,
-    participantId: participant.identity,
-  });
-
-  if (role === "driver") {
-    callEvents.emitCallStarted({
-      callId,
-      roomName: `call_${callId}`,
-    });
-  }
-}
-
-export async function onParticipantDisconnected(
-  participant: ParticipantInfo,
-  callId: string
-) {
-  let role: "driver" | "bot" | "human" = "human";
-
-  try {
+  resolveRole(participant: LiveKitParticipant): ParticipantRole {
     if (participant.metadata) {
-      role = JSON.parse(participant.metadata).role;
+      try {
+        const meta = JSON.parse(participant.metadata)
+        if (meta.role === "driver") return "driver"
+        if (meta.role === "bot") return "bot"
+      } catch {
+
+      }
     }
-  } catch {}
 
-  callEvents.emit("participant.left", {
-    callId,
-    role,
-    participantId: participant.identity,
-  });
+    if (participant.identity.startsWith("bot_")) return "bot"
+    if (participant.identity.startsWith("driver_")) return "driver"
 
-  if (role === "driver") {
-    callEvents.emitCallEnded({
+    return "human"
+  }
+
+
+  async onParticipantConnected(
+    callId: string,
+    participant: LiveKitParticipant
+  ) {
+    const role = this.resolveRole(participant)
+
+    callEvents.emit("PARTICIPANT_JOINED" as any, {
       callId,
-      roomName: `call_${callId}`,
-    });
+      role,
+      participantId: participant.identity,
+    })
 
-    await closeRoom(callId);
+    if (role === "driver") {
+      callEvents.emit("CALL_STARTED", { callId })
+    }
+  }
+
+  async onParticipantDisconnected(
+    callId: string,
+    participant: LiveKitParticipant
+  ) {
+    const role = this.resolveRole(participant)
+
+    callEvents.emit("PARTICIPANT_LEFT" as any, {
+      callId,
+      role,
+      participantId: participant.identity,
+    })
+
+    if (role === "driver") {
+      callEvents.emit("CALL_ENDED", { callId })
+      await this.roomManager.closeRoom(callId)
+    }
   }
 }

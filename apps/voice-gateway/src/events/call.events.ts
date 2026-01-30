@@ -1,36 +1,35 @@
-import { EventEmitter } from "events";
+type CallEventType =
+  | "CALL_CREATED"
+  | "CALL_STARTED"
+  | "CALL_ENDED"
+  | "CALL_FAILED"
 
-export type CallStartedEvent = {
-  callId: string;
-  roomName: string;
-};
+type CallEventPayload = {
+  callId: string
+  [key: string]: any
+}
 
-export type CallEndedEvent = {
-  callId: string;
-  roomName: string;
-  reason?: string;
-};
+class CallEventEmitter {
+  private emitted = new Set<string>()
 
-class CallEvents extends EventEmitter {
-  emitCallStarted(event: CallStartedEvent) {
-    this.emit("call.started", event);
-  }
+  emit(type: CallEventType, payload: CallEventPayload) {
+    const key = `${payload.callId}:${type}`
 
-  emitCallEnded(event: CallEndedEvent) {
-    this.emit("call.ended", event);
-  }
+    if (this.emitted.has(key)) {
+      return // idempotent
+    }
 
-  onCallStarted(
-    listener: (event: CallStartedEvent) => void
-  ) {
-    this.on("call.started", listener);
-  }
+    this.emitted.add(key)
 
-  onCallEnded(
-    listener: (event: CallEndedEvent) => void
-  ) {
-    this.on("call.ended", listener);
+    const event = {
+      type,
+      payload,
+      timestamp: new Date().toISOString(),
+    }
+
+    // 🔹 replace later with real orchestrator
+    console.log("[CALL_EVENT]", JSON.stringify(event))
   }
 }
 
-export const callEvents = new CallEvents();
+export const callEvents = new CallEventEmitter()

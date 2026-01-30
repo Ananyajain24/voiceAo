@@ -1,68 +1,48 @@
-import { AudioFrame } from "livekit";
-import { latencyMonitor } from "./latency.monitor";
+// src/streaming/audio.ingress.ts
 
-
-const activeIngress = new Map<
-  string,
-  {
-    callId: string;
-    participantId: string;
-    role: "driver" | "human";
-  }
->();
-
-
-export function attachAudioIngress(params: {
-  callId: string;
-  participantId: string;
-  trackSid: string;
-  role: "driver" | "human";
-}) {
-  const { trackSid, callId, participantId, role } = params;
-
- 
-  if (activeIngress.has(trackSid)) return;
-
-  activeIngress.set(trackSid, {
-    callId,
-    participantId,
-    role,
-  });
+type AudioFrame = {
+  samples: Int16Array
+  sampleRate: number
+  channels: number
+  timestamp: number
 }
 
+export class AudioIngress {
+  onAudioFrame(frame: AudioFrame) {
+    // 1️⃣ Validate sample rate
+    if (!this.isSupportedSampleRate(frame.sampleRate)) {
+      return // drop silently
+    }
 
-export function detachAudioIngress(trackSid: string) {
-  if (!activeIngress.has(trackSid)) return;
-  activeIngress.delete(trackSid);
-}
+    // 2️⃣ Silence detection
+    if (this.isSilent(frame.samples)) {
+      return // forward later phases, but ignore now
+    }
 
-export function onAudioFrame(trackSid: string, frame: AudioFrame) {
-  const context = activeIngress.get(trackSid);
-  if (!context) return;
-
-
-  if (frame.sampleRate !== 16000 && frame.sampleRate !== 48000) {
-    return;
+    // 3️⃣ Non-blocking observation
+    this.observeFrame(frame)
   }
 
-
-  latencyMonitor.recordFrameTiming(frame);
-
-  forwardFrame(frame, context);
-}
-
-
-function forwardFrame(
-  frame: AudioFrame,
-  context: {
-    callId: string;
-    participantId: string;
-    role: "driver" | "human";
+  private isSupportedSampleRate(rate: number): boolean {
+    return rate === 16000 || rate === 48000
   }
-) {
- 
 
-  process.nextTick(() => {
-   
-  });
+  private isSilent(samples: Int16Array): boolean {
+    let sum = 0
+    for (let i = 0; i < samples.length; i++) {
+      sum += Math.abs(samples[i])
+      if (sum > 0) return false
+    }
+    return true
+  }
+
+  private observeFrame(frame: AudioFrame) {
+    // Phase 5: just observe
+    // Phase 6+: forward to processing
+    console.log("[AUDIO_IN]", {
+      samples: frame.samples.length,
+      sampleRate: frame.sampleRate,
+      channels: frame.channels,
+    })
+  }
 }
